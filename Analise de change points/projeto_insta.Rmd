@@ -1,0 +1,434 @@
+---
+title: "SICSS - Projeto Final"
+author: "Tomás Paixão Borges"
+date: "2023-07-11"
+output: html_document
+---
+
+# Pacotes
+
+```{r Importando pacotes, warning = F}
+library(tidyverse)
+library(tidytext)
+library(tm)
+library(dplyr)
+library(stringr)
+library(readxl)
+library(knitr)
+library(cowplot)
+library(ggplot2)
+library(gridExtra)
+library(ggchangepoint)
+library(changepoint)
+```
+
+# Contextualização
+
+Estamos explorando a base de dados do perfil do Bolsonaro no Instagram. Os dados foram retirados via Crowdtangle. 
+
+# Lendo a base de dados:
+
+```{r}
+bd_insta <- read.csv("dados_insta.csv", sep=";")
+```
+# Análise Exploratória dos Dados
+
+## Mudanças iniciais na base
+
+```{r}
+# Vamos mudar o nome da variável com a soma das interações
+colnames(bd_insta)[6] = "Total.interactions"
+
+# Converter a variável "Date" para o formato "M/D/YY H:MM AM/PM"
+bd_insta$Date <- as.POSIXct(bd_insta$Date, format = "%m/%d/%y %I:%M %p")
+
+# Converter a variável "Date" para o formato "DD/MM/YYYY"
+bd_insta$Date <- format(bd_insta$Date, "%d/%m/%Y")
+
+# Criando uma cópia para ter uma variável que não será mexida posteriormente
+bd_insta$Date_BR <- bd_insta$Date
+
+######## Criando coluna de mês
+bd_insta$Month <- substr(bd_insta$Date, 4,10)
+
+# Ordenando o BD:
+bd_insta <- bd_insta %>% 
+  arrange(as.Date(Date, format = "%d/%m/%Y"))
+
+# Criando um DF para trabalhar com os dados mensais (interações totais e num de postagens)
+
+# Criar uma sequência de datas para todas as semanas entre 06/2022 e 07/2023
+todos_meses <- seq(as.Date("2022-06-01"), as.Date("2023-07-31"), by = "month")
+
+# Criar o dataframe "semanas" com as colunas "Interval_Week" e "ID_month"
+meses <- data.frame(Month = format(todos_meses, "%m/%Y"), ID_month = seq_along(todos_meses))
+
+meses <- meses %>%
+  left_join(bd_insta %>%
+              group_by(Month) %>%
+              summarise(total_interactions_month = sum(Total.interactions),
+                        mean_interactions_month = mean(Total.interactions),
+                        median_interactions_month = median (Total.interactions),
+                        num_postagens_month = n()), by = "Month")
+
+# NAs = 0 (para não deixar de plotar no gráfico) e colocar em ordem
+meses <- meses %>% 
+  mutate_all(~replace_na(., 0)) %>%
+   arrange(ID_month)
+
+# Passando as variáveis do banco de dados novo pro original
+bd_insta <- left_join(bd_insta, meses, by = "Month")
+
+# Deixar em ordem
+####### Criando coluna de semana
+
+# Converter a variável "Date" para formato de data
+bd_insta$Date <- as.Date(bd_insta$Date, format = "%d/%m/%Y")
+
+# Criar a variável "Intervalo"
+bd_insta$Interval_Week <- paste0(format(floor_date(bd_insta$Date, "week") - days(1), "%d/%m/%Y"),
+                             " até ",
+                             format(ceiling_date(bd_insta$Date, "week") - days(2), "%d/%m/%Y"))
+
+# Criar uma sequência de datas para todas as semanas entre 18/06/2022 e 14/07/2023
+todas_semanas <- seq(as.Date("2022-06-18"), as.Date("2023-07-14"), by = "week")
+
+# Criar o dataframe "semanas" com as colunas "Interval_Week" e "ID"
+semanas <- data.frame(Interval_Week = paste0(format(todas_semanas, "%d/%m/%Y"), " até ", format(todas_semanas + 6, "%d/%m/%Y")), ID_week = seq_along(todas_semanas))
+
+# Criando um DF para trabalhar com os dados semanais (interações totais e num de postagens)
+semanas <- semanas %>%
+  left_join(bd_insta %>%
+              group_by(Interval_Week) %>%
+              summarise(total_interactions_week = sum(Total.interactions),
+                        mean_interactions_week = mean (Total.interactions),
+                        median_interactions_week = median (Total.interactions),
+                        num_postagens_week = n()), by = "Interval_Week")
+
+# NAs = 0 (para não deixar de plotar no gráfico)
+semanas <- semanas %>% 
+  mutate_all(~replace_na(., 0)) %>%
+   arrange(ID_week)
+
+# Passando as variáveis do banco de dados novo pro original
+bd_insta <- left_join(bd_insta, semanas, by = "Interval_Week")
+
+
+########### Criando BD de dias
+
+# Criar uma sequência de datas para todas as semanas entre 18/06/2022 e 14/07/2023
+todos_dias <- seq(as.Date("2022-06-24"), as.Date("2023-07-10"), by = "day")
+
+# Criar o dataframe "dias" com as colunas "Day" e "ID_day"
+dias <- data.frame(Date_BR = format(todos_dias, "%d/%m/%Y"), ID_day = seq_along(todos_dias))
+
+dias <- dias %>%
+  left_join(bd_insta %>%
+              group_by(Date_BR) %>%
+              summarise(total_interactions_day = sum(Total.interactions),
+                        num_postagens_day = n()), by = "Date_BR")
+
+# NAs = 0 (para não deixar de plotar no gráfico) e colocar em ordem
+dias <- dias %>% 
+  mutate_all(~replace_na(., 0)) %>%
+   arrange(ID_day)
+
+
+########### Criando BD de dias (sem os dias sem posts)
+
+# Criar o dataframe "dias2" com as colunas "Day" e "ID_day"
+dias2 <- data.frame(Date_BR = unique(bd_insta$Date_BR), ID_day = seq_along(unique(bd_insta$Date_BR)))
+
+dias2 <- dias2 %>%
+  left_join(bd_insta %>%
+              group_by(Date_BR) %>%
+              summarise(total_interactions_day = sum(Total.interactions),
+                        num_postagens_day = n()), by = "Date_BR")
+
+```
+
+Podemos ainda criar uma variável com o tipo de conteúdo (Reels, Posts ou IG-TV). Essa variável não está explícita no banco, mas pode ser extraída a partir dos links:
+
+```{r}
+# Criar a coluna "Type_Content" com base na variável "Link"
+bd_insta <- bd_insta %>%
+  mutate(Type_Content = case_when(
+    grepl("/reel/", Link) ~ "Reel",
+    grepl("/p/", Link) ~ "Post",
+    grepl("/tv/", Link) ~ "IGTV",
+    TRUE ~ "Outro"
+  ))
+```
+
+# Exportar dataframes
+
+```{r}
+write.csv(bd_insta, "bd_insta.csv", row.names=FALSE)
+write.csv(dias, "dias.csv", row.names=FALSE)
+write.csv(dias2, "dias2.csv", row.names=FALSE)
+write.csv(meses, "meses.csv", row.names=FALSE)
+write.csv(semanas, "semanas.csv", row.names=FALSE)
+
+```
+
+
+## Análise exploratória dos dados
+
+Por dia:
+
+```{r}
+# Quantidade de posts por dia
+
+ggplot(data = dias, aes(x = reorder(Date_BR, ID_day), y = num_postagens_day)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Intervalo", y = "Quantidade de posts", title = "Posts por Dia no Instagram") +
+    scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 30 == 0, x, "")) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+Por semana: 
+```{r}
+# Cores para os gráficos
+colorsslide <- c("#E7B800","coral2","#2E9FDF")
+colorspaper <- c("gray15","gray50","gray75")
+
+# Quantidade de posts por semana
+
+datas <- c("01/10/2022", "04/10/2022", "29/10/2022", "12/12/2022", "17/01/2023", "16/05/2023")
+
+ggplot(data = semanas, aes(x = reorder(Interval_Week, ID_week), y = num_postagens_week)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 4 == 0, x, "")) + 
+  labs(x = "Intervalo", y = "Quantidade de posts", title = "Posts por Semana")
+
+
+# Tipo de conteúdo postado por semana
+ggplot(data = bd_insta, aes(x = reorder(Interval_Week, ID_week), fill = Type_Content)) +
+  geom_bar() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 4 == 0, x, "")) +
+  scale_fill_manual(values=colorspaper) +
+    xlab("Intervalo") +
+    ylab("Quantidade de posts") +
+    labs(fill = "Tipo de Conteúdo", title = "Tipo de Conteúdo por Semana")
+
+# Engajamento por semana (total)
+
+g1 <- ggplot(data = semanas, aes(reorder(Interval_Week, ID_week), y = total_interactions_week)) +
+  geom_point() +
+  stat_summary(
+    fun = mean,
+    geom = "line",
+    aes(group = 1),
+    linetype = "dashed",
+    color = "blue"
+  ) +
+  labs(x = "Semana", y = "Quantidade de Engajamento", title = "Engajamento por posts feitos na semana") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+    scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 4 == 0, x, "")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Engajamento por semana (mediana)
+ggplot(data = semanas, aes(reorder(Interval_Week, ID_week), y = median_interactions_week)) +
+  geom_point() +
+  stat_summary(
+    fun = mean,
+    geom = "line",
+    aes(group = 1),
+    linetype = "dashed",
+    color = "blue"
+  ) +
+  labs(title = "Engajamento por semana - Jair Bolsonaro (Julho 2022 - Julho 2023)", x = "Semana", y = "Mediana do engajamento") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+    scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 4 == 0, x, "")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+plot_grid(g1,g2)
+
+```
+
+Por mês:
+
+```{r}
+# Quantidade de posts por mês
+ggplot(data = meses, aes(reorder(Month, ID_month), y = num_postagens_month)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  labs(x = "Intervalo", y = "Quantidade de posts", title = "Posts por Mês")
+
+
+# Tipo de conteúdo postado por mês
+ggplot(data = bd_insta, aes(x = reorder(Month, ID_month), fill = Type_Content)) +
+  geom_bar() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  scale_fill_manual(values=colorspaper) +
+    xlab("Intervalo") +
+    ylab("Quantidade de posts") +
+    labs(fill = "Tipo de Conteúdo", title = "Tipo de Conteúdo por Mês")
+
+# Engajamento por mês
+ggplot(data = meses, aes(x = reorder(Month, ID_month), y = total_interactions_month)) +
+  geom_point() +
+  stat_summary(
+    fun = mean,
+    geom = "line",
+    aes(group = 1),
+    linetype = "dashed",
+    color = "blue"
+  ) +
+  labs(x = "Mês", y = "Quantidade de Engajamento", title = "Engajamento por posts feitos no mês") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Engajamento por mês (mediana)
+ggplot(data = meses, aes(x = reorder(Month, ID_month), y = median_interactions_month)) +
+  geom_point() +
+  stat_summary(
+    fun = mean,
+    geom = "line",
+    aes(group = 1),
+    linetype = "dashed",
+    color = "blue"
+  ) +
+  labs(x = "Mês", y = "Mediana do Engajamento", title = "Engajamento por mês - Jair Bolsonaro (Julho 2022 - Julho 2023)") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+## Quais são os top 10 posts?
+
+```{r}
+# Ordenar o dataset pelo número de interações em ordem decrescente
+bd_insta_ord <- bd_insta[order(bd_insta$Total.interactions, decreasing = T), ]
+
+# Selecionar os 10 vídeos mais vistos
+top_10_posts <- bd_insta_ord[1:10, ]
+
+# Exibir a tabela
+tabela <- kable(top_10_posts[, c("Date_BR", "Message", "Total.interactions")], 
+      col.names = c("Data", "Mensagem", "Número de Interações"))
+
+tabela <- tabela %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped") %>%
+  add_header_above(c("Top 10 Posts" = 4))
+
+```
+
+# Análise de changepoints
+
+## Com pacote changepoint
+
+```{r}
+# Converter data
+ansvar=cpt.meanvar(semanas$total_interactions_week)
+plot(ansvar, main = "Análise de changepoint", ylab = "Interações", xlab = "Semana")
+abline(v = 19, col = "red", lty = "dashed")
+
+# Semana
+ansvar=cpt.meanvar(semanas$total_interactions_week,
+                   penalty = "MBIC",
+                   method = "PELT")
+plot(ansvar, main = "Análise de changepoint", ylab = "Interações", xlab = "Semana")
+abline(v = 19, col = "red", lty = "dashed")
+
+# Dia (com os dias sem post)
+ansvar=cpt.meanvar(dias$total_interactions_day,
+                   penalty = "MBIC",
+                   method = "PELT") 
+
+# Dia (sem os dias sem post)
+ansvar=cpt.meanvar(dias2$total_interactions_day,
+                   penalty = "MBIC",
+                   method = "PELT")
+
+# Número total de casos
+num_casos <- length(dias2$Date_BR)
+
+# Selecionar índices a cada 50 casos
+indices <- seq(50, num_casos, by = 50)
+
+# Selecionar apenas os casos correspondentes aos índices selecionados
+dados_plot <- dias2[indices, ]
+
+# Plot com os labels personalizados
+plot(ansvar, main = "Análise de changepoint", ylab = "Interações", xlab = "Dia", xaxt = "n")
+axis(1, at = indices, labels = dados_plot$Date_BR, las = 2)
+
+print(ansvar)
+```
+
+## Com pacote ggcptplot
+
+```{r}
+# Mean_var / método = BinSeg (semana - com todos os dias)
+
+ggcptplot(semanas$total_interactions_week,
+change_in = "meanvar",
+cptline_alpha = 1,
+cp_method = "BinSeg",
+cptline_color = "red",
+cptline_type = "solid",
+cptline_size = 0.5
+) + 
+  labs(x = "Semana", y = "Quantidade de engajamento", title = "Engajamento por Semana (com BinSeg)") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Mean_var / método = PELT (semana - com todos os dias)
+
+ggcptplot(semanas$total_interactions_week,
+change_in = "meanvar",
+cptline_alpha = 1,
+cp_method = "AMOC",
+cptline_color = "red",
+cptline_type = "solid",
+cptline_size = 0.5
+) + 
+  labs(x = "Semana", y = "Quantidade de engajamento", title = "Engajamento por Semana (com AMOC)") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+dias2_subset <- dias2[, c(1, 3)]
+
+# Mean_var / método = PELT (com todos os dias)
+
+ggcptplot(dias$total_interactions_day,
+change_in = "mean_var",
+cptline_alpha = 1,
+cp_method = "PELT",
+cptline_color = "red",
+cptline_type = "solid",
+cptline_size = 0.5
+) + 
+  labs(x = "Dia", y = "Quantidade de engajamento", title = "Engajamento por Dia") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Mean_var / método = PELT (sem os dias onde interações = 0)
+
+ggcptplot(bd_insta$total_interactions_day,
+change_in = "mean_var",
+cptline_alpha = 1,
+cp_method = "PELT",
+cptline_color = "red",
+cptline_type = "solid",
+cptline_size = 0.5
+) + 
+  labs(x = "Dia", y = "Quantidade de engajamento", title = "Engajamento por Dia") +
+  scale_y_continuous(labels = function(x) paste0(x / 10^6, "M")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
