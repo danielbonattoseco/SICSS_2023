@@ -1,0 +1,111 @@
+---
+title: "Projeto_facebook"
+author: "João Camargos"
+date: "2023-07-12"
+output: pdf_document
+---
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, rio, mirt, psych, lubridate, changepoint,ggchangepoint)
+options(scipen = 9999999)
+set.seed(2000)
+```
+
+# Contextualização
+
+Estamos explorando a base de dados do perfil do Bolsonaro no Instagram. Os dados foram retirados via Crowdtangle.
+
+# Lendo a base de dados:
+
+```{r}
+bd <- import("C:/Users/João/OneDrive/Documentos/JOAO/Mestrado UFMG/SICSS/Projeto final/Posts_facebook.csv", quote = "")
+
+bd <- bd |> mutate(data = mdy_hm(Date),
+                   day = day(data),
+                   month = month(data),
+                   year = year(data),
+                   week = week(data)) |> 
+  unite(MY,  year,month, sep = "-") |> 
+  unite(DMY, MY, day, sep = "-" ) |> 
+  mutate(DMY = ymd(DMY))
+```
+
+# Análise dos posts por dia
+
+```{r}
+# Cores para os gráficos
+colorsslide <- c("#E7B800","coral2","#2E9FDF")
+colorspaper <- c("gray15","gray50","gray75")
+
+bd_day <- bd |> 
+  group_by(DMY) |> 
+  summarise(mean = mean(`Number of Reactions, Comments & Shares`),
+            median = median(`Number of Reactions, Comments & Shares`),
+            number_posts = n())
+
+```
+
+# Número de posts por dia
+
+```{r}
+ggplot(data = bd_day, aes(x = DMY, y = number_posts)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  labs(x = "Intervalo", y = "Quantidade de posts", title = "Posts por dia no Facebook")
+```
+
+# Mediana do engajamento por dia
+
+```{r}
+bd_day |> 
+  ggplot(aes(x = DMY, y = median)) +
+  geom_path()+
+  geom_smooth()+
+  theme_bw()+
+  labs(title = "Engajamento por dia - Jair Bolsonaro (Julho 2022 - Julho 2023)", x = "Data", y = "Mediana das reações, comentários e compartilhamentos")
+```
+
+# Análise de change points
+
+Pacote changepoint
+
+```{r}
+change_DMedian <- cpt.meanvar(bd_day$median,penalty = "MBIC",
+                            method = "PELT")
+
+print(change_DMedian)
+
+
+# Selecionar os dias de change point
+d_p_c <- c(100, 103, 128, 140, 166, 259)
+
+# Selecionar apenas os casos correspondentes aos índices selecionados
+dados_plot <- bd_day[d_p_c, ]
+
+# Plot com os labels personalizados
+plot(change_DMedian, main = "Changepoints Engajamento diário- Jair Bolsonaro", xlab = "Tempo", ylab = "Mediana do Engajamento", xaxt = "n")
+axis(1, at = d_p_c, labels = dados_plot$DMY, las = 2, cex.axis = 0.5)
+```
+
+Pacote ggchangepoint
+
+```{r}
+ggcptplot(data = bd_day$median,cp_method = "PELT",
+          change_in = "mean_var",
+          cptline_color = "red",
+          cptline_type = "solid",
+          cptline_size = 0.5) +
+  theme_bw()+
+  labs(x = "ID do dia", y = "Quantidade de engajamento", title = "Change Points Engajamento por Dia")
+```
+
+# Filtrando os eventos
+
+```{r}
+bd_day <- bd_day |> mutate(is_change_post = ifelse(row_number()%in% d_p_c,1,0 ))
+
+bd_day_change <- bd_day |> filter(is_change_post == 1)
+
+export(bd_day_change, "Posts_change.xlsx")
+```
